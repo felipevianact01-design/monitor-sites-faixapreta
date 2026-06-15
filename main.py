@@ -31,26 +31,13 @@ GH_HEADERS = {
 
 # Cache em memória — evita chamar GitHub API em toda requisição
 _url_cache: list = []
-# Cliente HTTP compartilhado — reutiliza conexões entre verificações
-_check_client: httpx.AsyncClient | None = None
 
 
 @app.on_event("startup")
 async def startup():
-    global _check_client, _url_cache
-    _check_client = httpx.AsyncClient(
-        timeout=10,
-        follow_redirects=True,
-        limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
-    )
+    global _url_cache
     _url_cache = await _fetch_from_github()
     logger.info(f"Iniciado com {len(_url_cache)} URLs carregadas")
-
-
-@app.on_event("shutdown")
-async def shutdown():
-    if _check_client:
-        await _check_client.aclose()
 
 
 async def _fetch_from_github() -> list:
@@ -116,7 +103,7 @@ class UrlEntry(BaseModel):
     url: str
 
 
-async def check_url(entry: dict) -> dict:
+async def check_url(entry: dict, client: httpx.AsyncClient) -> dict:
     url = entry["url"]
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
@@ -126,7 +113,7 @@ async def check_url(entry: dict) -> dict:
     error = None
 
     try:
-        response = await _check_client.get(url)
+        response = await client.get(url)
         elapsed = round((time.time() - start) * 1000)
         code = response.status_code
 
@@ -171,7 +158,9 @@ async def get_status():
     urls = load_urls()
     if not urls:
         return []
-    results = await asyncio.gather(*[check_url(u) for u in urls])
+    limits = httpx.Limits(max_connections=50, max_keepalive_connections=20)
+    async with httpx.AsyncClient(timeout=10, follow_redirects=True, limits=limits) as client:
+        results = await asyncio.gather(*[check_url(u, client) for u in urls])
     order = {"red": 0, "yellow": 1, "green": 2}
     return sorted(results, key=lambda x: order.get(x["color"], 9))
 
@@ -407,6 +396,7 @@ const REFRESH_INTERVAL = 5 * 60;
 let countdown = REFRESH_INTERVAL;
 let timerInterval = null;
 let checking = false;
+let load_urls_cache = [];
 
 async function refresh() {
   if (checking) return;
@@ -420,10 +410,13 @@ async function refresh() {
   await showLoadingCards();
 
   try {
-    const res = await fetch('/api/status');
+    const res = await fetch('/api/status', { signal: AbortSignal.timeout(40000) });
     const data = await res.json();
     renderCards(data);
-  } catch (e) { console.error(e); }
+  } catch (e) {
+    console.error(e);
+    renderCards(load_urls_cache.map(u => ({...u, status:'Timeout', color:'red', error:'Verificação demorou demais'})));
+  }
 
   btn.innerHTML = 'Verificar agora';
   btn.disabled = false;
@@ -435,6 +428,7 @@ async function refresh() {
 async function showLoadingCards() {
   const res = await fetch('/api/urls');
   const urls = await res.json();
+  load_urls_cache = urls;
   const grid = document.getElementById('grid');
   const empty = document.getElementById('empty');
 
