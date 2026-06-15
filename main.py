@@ -71,17 +71,20 @@ async def run_all_checks():
     if _checking:
         return
     _checking = True
-    logger.info("Iniciando verificação de todos os sites...")
+    logger.info("Iniciando verificação...")
     urls = load_urls()
-    results = []
+    semaphore = asyncio.Semaphore(5)
+
+    async def guarded(u):
+        async with semaphore:
+            return await check_url(u, client)
+
     async with httpx.AsyncClient(
         timeout=8, follow_redirects=True,
-        limits=httpx.Limits(max_connections=5, max_keepalive_connections=5)
+        limits=httpx.Limits(max_connections=10, max_keepalive_connections=5)
     ) as client:
-        for u in urls:
-            result = await check_url(u, client)
-            results.append(result)
-            logger.info(f"{result['name']}: {result['status']}")
+        results = await asyncio.gather(*[guarded(u) for u in urls])
+
     order = {"red": 0, "yellow": 1, "green": 2}
     _results_cache = sorted(results, key=lambda x: order.get(x["color"], 9))
     _last_check = datetime.now().strftime("%d/%m %H:%M:%S")
