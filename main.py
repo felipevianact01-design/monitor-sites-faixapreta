@@ -29,8 +29,31 @@ GH_HEADERS = {
     "X-GitHub-Api-Version": "2022-11-28",
 }
 
+# Cache em memória — evita chamar GitHub API em toda requisição
+_url_cache: list = []
+# Cliente HTTP compartilhado — reutiliza conexões entre verificações
+_check_client: httpx.AsyncClient | None = None
 
-async def load_urls() -> list:
+
+@app.on_event("startup")
+async def startup():
+    global _check_client, _url_cache
+    _check_client = httpx.AsyncClient(
+        timeout=10,
+        follow_redirects=True,
+        limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+    )
+    _url_cache = await _fetch_from_github()
+    logger.info(f"Iniciado com {len(_url_cache)} URLs carregadas")
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    if _check_client:
+        await _check_client.aclose()
+
+
+async def _fetch_from_github() -> list:
     if GITHUB_TOKEN and GITHUB_REPO:
         try:
             async with httpx.AsyncClient(timeout=10) as client:
@@ -48,45 +71,49 @@ async def load_urls() -> list:
     return []
 
 
-async def save_urls(urls: list) -> None:
-    if GITHUB_TOKEN and GITHUB_REPO:
-        try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                r = await client.get(
-                    f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE}",
-                    headers=GH_HEADERS,
-                )
-                sha = r.json().get("sha") if r.status_code == 200 else None
+def load_urls() -> list:
+    return _url_cache
 
-                encoded = base64.b64encode(
-                    json.dumps(urls, ensure_ascii=False, indent=2).encode("utf-8")
-                ).decode("utf-8")
 
-                body = {"message": "atualiza urls.json via monitor", "content": encoded}
-                if sha:
-                    body["sha"] = sha
-
-                pr = await client.put(
-                    f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE}",
-                    headers=GH_HEADERS,
-                    json=body,
-                )
-            if pr.status_code not in (200, 201):
-                logger.error(f"Erro GitHub: {pr.text}")
-                return
+async def _push_to_github(urls: list) -> None:
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(
+                f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE}",
+                headers=GH_HEADERS,
+            )
+            sha = r.json().get("sha") if r.status_code == 200 else None
+            encoded = base64.b64encode(
+                json.dumps(urls, ensure_ascii=False, indent=2).encode("utf-8")
+            ).decode("utf-8")
+            body = {"message": "atualiza urls.json via monitor", "content": encoded}
+            if sha:
+                body["sha"] = sha
+            pr = await client.put(
+                f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE}",
+                headers=GH_HEADERS,
+                json=body,
+            )
+        if pr.status_code not in (200, 201):
+            logger.error(f"Erro GitHub: {pr.text}")
+        else:
             logger.info("urls.json salvo no GitHub")
-            return
-        except Exception as e:
-            logger.error(f"Erro ao salvar no GitHub: {e}")
-    URLS_FILE.write_text(json.dumps(urls, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as e:
+        logger.error(f"Erro ao salvar no GitHub: {e}")
+
+
+async def save_urls(urls: list) -> None:
+    global _url_cache
+    _url_cache = urls
+    if GITHUB_TOKEN and GITHUB_REPO:
+        asyncio.create_task(_push_to_github(urls))
+    else:
+        URLS_FILE.write_text(json.dumps(urls, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 class UrlEntry(BaseModel):
     name: str
     url: str
-
-
-_limits = httpx.Limits(max_connections=10, max_keepalive_connections=5)
 
 
 async def check_url(entry: dict) -> dict:
@@ -99,8 +126,7 @@ async def check_url(entry: dict) -> dict:
     error = None
 
     try:
-        async with httpx.AsyncClient(timeout=10, follow_redirects=True, limits=_limits) as client:
-            response = await client.get(url)
+        response = await _check_client.get(url)
         elapsed = round((time.time() - start) * 1000)
         code = response.status_code
 
@@ -142,7 +168,7 @@ async def dashboard():
 
 @app.get("/api/status")
 async def get_status():
-    urls = await load_urls()
+    urls = load_urls()
     if not urls:
         return []
     results = await asyncio.gather(*[check_url(u) for u in urls])
@@ -152,12 +178,12 @@ async def get_status():
 
 @app.get("/api/urls")
 async def get_urls():
-    return await load_urls()
+    return load_urls()
 
 
 @app.post("/api/urls")
 async def add_url(entry: UrlEntry):
-    urls = await load_urls()
+    urls = load_urls().copy()
     new_entry = {
         "id": hashlib.md5(f"{entry.name}{entry.url}{time.time()}".encode()).hexdigest()[:8],
         "name": entry.name.strip(),
@@ -171,8 +197,7 @@ async def add_url(entry: UrlEntry):
 
 @app.delete("/api/urls/{url_id}")
 async def delete_url(url_id: str):
-    urls = await load_urls()
-    urls = [u for u in urls if u["id"] != url_id]
+    urls = [u for u in load_urls() if u["id"] != url_id]
     await save_urls(urls)
     return {"ok": True}
 
