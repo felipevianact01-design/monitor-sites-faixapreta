@@ -158,7 +158,7 @@ async def get_status():
     urls = load_urls()
     if not urls:
         return []
-    semaphore = asyncio.Semaphore(10)
+    semaphore = asyncio.Semaphore(1)
     limits = httpx.Limits(max_connections=15, max_keepalive_connections=10)
 
     async def guarded_check(entry):
