@@ -72,24 +72,31 @@ async def run_all_checks():
         return
     _checking = True
     logger.info("Iniciando verificação...")
-    urls = load_urls()
-    semaphore = asyncio.Semaphore(5)
+    try:
+        urls = load_urls()
+        if not urls:
+            return
+        semaphore = asyncio.Semaphore(5)
 
-    async def guarded(u):
-        async with semaphore:
-            return await check_url(u, client)
+        async def guarded(u):
+            async with semaphore:
+                return await check_url(u, client)
 
-    async with httpx.AsyncClient(
-        timeout=8, follow_redirects=True,
-        limits=httpx.Limits(max_connections=10, max_keepalive_connections=5)
-    ) as client:
-        results = await asyncio.gather(*[guarded(u) for u in urls])
+        async with httpx.AsyncClient(
+            timeout=8, follow_redirects=True,
+            limits=httpx.Limits(max_connections=10, max_keepalive_connections=5)
+        ) as client:
+            raw = await asyncio.gather(*[guarded(u) for u in urls], return_exceptions=True)
 
-    order = {"red": 0, "yellow": 1, "green": 2}
-    _results_cache = sorted(results, key=lambda x: order.get(x["color"], 9))
-    _last_check = datetime.now().strftime("%d/%m %H:%M:%S")
-    _checking = False
-    logger.info(f"Verificação concluída: {len(results)} sites")
+        results = [r for r in raw if isinstance(r, dict)]
+        order = {"red": 0, "yellow": 1, "green": 2}
+        _results_cache = sorted(results, key=lambda x: order.get(x["color"], 9))
+        _last_check = datetime.now().strftime("%d/%m %H:%M:%S")
+        logger.info(f"Verificação concluída: {len(results)} sites")
+    except Exception as e:
+        logger.error(f"Erro na verificação: {e}")
+    finally:
+        _checking = False
 
 
 async def _push_to_github(urls: list) -> None:
