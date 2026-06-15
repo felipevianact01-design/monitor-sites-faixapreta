@@ -34,6 +34,7 @@ _url_cache: list = []
 _results_cache: list = []
 _checking: bool = False
 _last_check: str = ""
+_check_id: int = 0
 
 
 @app.on_event("startup")
@@ -41,7 +42,6 @@ async def startup():
     global _url_cache
     _url_cache = await _fetch_from_github()
     logger.info(f"Iniciado com {len(_url_cache)} URLs carregadas")
-    asyncio.create_task(run_all_checks())
 
 
 async def _fetch_from_github() -> list:
@@ -192,8 +192,11 @@ async def dashboard():
 
 @app.post("/api/check/start")
 async def start_check():
+    global _check_id
+    _check_id += 1
+    current_id = _check_id
     asyncio.create_task(run_all_checks())
-    return {"started": True}
+    return {"started": True, "check_id": current_id}
 
 
 @app.get("/api/check/result")
@@ -202,6 +205,7 @@ async def get_result():
         "checking": _checking,
         "results": _results_cache,
         "last_check": _last_check,
+        "check_id": _check_id,
         "total": len(load_urls()),
     }
 
@@ -450,7 +454,9 @@ async function refresh() {
   await showLoadingCards();
 
   // Dispara verificação no servidor (retorna imediatamente)
-  await fetch('/api/check/start', { method: 'POST' });
+  const startRes = await fetch('/api/check/start', { method: 'POST' });
+  const startData = await startRes.json();
+  const expectedId = startData.check_id;
 
   // Fica consultando o resultado a cada 2 segundos
   pollInterval = setInterval(async () => {
@@ -458,13 +464,16 @@ async function refresh() {
       const res = await fetch('/api/check/result');
       const data = await res.json();
 
-      if (!data.checking && data.results.length > 0) {
+      // Para quando a verificação terminar (checking=false após o nosso start)
+      if (!data.checking && data.check_id >= expectedId) {
         clearInterval(pollInterval);
-        renderCards(data.results);
+        if (data.results && data.results.length > 0) {
+          renderCards(data.results);
+        }
         btn.innerHTML = 'Verificar agora';
         btn.disabled = false;
         document.getElementById('last-check').textContent =
-          'Última verificação: ' + data.last_check;
+          data.last_check ? 'Última verificação: ' + data.last_check : '';
         startTimer();
       }
     } catch (e) { console.error(e); }
