@@ -158,9 +158,15 @@ async def get_status():
     urls = load_urls()
     if not urls:
         return []
-    limits = httpx.Limits(max_connections=50, max_keepalive_connections=20)
-    async with httpx.AsyncClient(timeout=10, follow_redirects=True, limits=limits) as client:
-        results = await asyncio.gather(*[check_url(u, client) for u in urls])
+    semaphore = asyncio.Semaphore(10)
+    limits = httpx.Limits(max_connections=15, max_keepalive_connections=10)
+
+    async def guarded_check(entry):
+        async with semaphore:
+            return await check_url(entry, client)
+
+    async with httpx.AsyncClient(timeout=8, follow_redirects=True, limits=limits) as client:
+        results = await asyncio.gather(*[guarded_check(u) for u in urls])
     order = {"red": 0, "yellow": 1, "green": 2}
     return sorted(results, key=lambda x: order.get(x["color"], 9))
 
@@ -410,12 +416,11 @@ async function refresh() {
   await showLoadingCards();
 
   try {
-    const res = await fetch('/api/status', { signal: AbortSignal.timeout(40000) });
+    const res = await fetch('/api/status', { signal: AbortSignal.timeout(120000) });
     const data = await res.json();
     renderCards(data);
   } catch (e) {
     console.error(e);
-    renderCards(load_urls_cache.map(u => ({...u, status:'Timeout', color:'red', error:'Verificação demorou demais'})));
   }
 
   btn.innerHTML = 'Verificar agora';
