@@ -29,8 +29,11 @@ GH_HEADERS = {
     "X-GitHub-Api-Version": "2022-11-28",
 }
 
-# Cache em memória — evita chamar GitHub API em toda requisição
+# Cache em memória
 _url_cache: list = []
+_results_cache: list = []
+_checking: bool = False
+_last_check: str = ""
 
 
 @app.on_event("startup")
@@ -38,6 +41,7 @@ async def startup():
     global _url_cache
     _url_cache = await _fetch_from_github()
     logger.info(f"Iniciado com {len(_url_cache)} URLs carregadas")
+    asyncio.create_task(run_all_checks())
 
 
 async def _fetch_from_github() -> list:
@@ -60,6 +64,29 @@ async def _fetch_from_github() -> list:
 
 def load_urls() -> list:
     return _url_cache
+
+
+async def run_all_checks():
+    global _results_cache, _checking, _last_check
+    if _checking:
+        return
+    _checking = True
+    logger.info("Iniciando verificação de todos os sites...")
+    urls = load_urls()
+    results = []
+    async with httpx.AsyncClient(
+        timeout=8, follow_redirects=True,
+        limits=httpx.Limits(max_connections=5, max_keepalive_connections=5)
+    ) as client:
+        for u in urls:
+            result = await check_url(u, client)
+            results.append(result)
+            logger.info(f"{result['name']}: {result['status']}")
+    order = {"red": 0, "yellow": 1, "green": 2}
+    _results_cache = sorted(results, key=lambda x: order.get(x["color"], 9))
+    _last_check = datetime.now().strftime("%d/%m %H:%M:%S")
+    _checking = False
+    logger.info(f"Verificação concluída: {len(results)} sites")
 
 
 async def _push_to_github(urls: list) -> None:
@@ -153,22 +180,20 @@ async def dashboard():
     return HTMLResponse(HTML)
 
 
-@app.get("/api/status")
-async def get_status():
-    urls = load_urls()
-    if not urls:
-        return []
-    semaphore = asyncio.Semaphore(1)
-    limits = httpx.Limits(max_connections=15, max_keepalive_connections=10)
+@app.post("/api/check/start")
+async def start_check():
+    asyncio.create_task(run_all_checks())
+    return {"started": True}
 
-    async def guarded_check(entry):
-        async with semaphore:
-            return await check_url(entry, client)
 
-    async with httpx.AsyncClient(timeout=8, follow_redirects=True, limits=limits) as client:
-        results = await asyncio.gather(*[guarded_check(u) for u in urls])
-    order = {"red": 0, "yellow": 1, "green": 2}
-    return sorted(results, key=lambda x: order.get(x["color"], 9))
+@app.get("/api/check/result")
+async def get_result():
+    return {
+        "checking": _checking,
+        "results": _results_cache,
+        "last_check": _last_check,
+        "total": len(load_urls()),
+    }
 
 
 @app.get("/api/urls")
@@ -401,12 +426,11 @@ HTML = """<!DOCTYPE html>
 const REFRESH_INTERVAL = 5 * 60;
 let countdown = REFRESH_INTERVAL;
 let timerInterval = null;
-let checking = false;
+let pollInterval = null;
 let load_urls_cache = [];
 
 async function refresh() {
-  if (checking) return;
-  checking = true;
+  clearInterval(pollInterval);
   countdown = REFRESH_INTERVAL;
 
   const btn = document.getElementById('btn-refresh');
@@ -415,19 +439,26 @@ async function refresh() {
 
   await showLoadingCards();
 
-  try {
-    const res = await fetch('/api/status', { signal: AbortSignal.timeout(120000) });
-    const data = await res.json();
-    renderCards(data);
-  } catch (e) {
-    console.error(e);
-  }
+  // Dispara verificação no servidor (retorna imediatamente)
+  await fetch('/api/check/start', { method: 'POST' });
 
-  btn.innerHTML = 'Verificar agora';
-  btn.disabled = false;
-  checking = false;
-  document.getElementById('last-check').textContent =
-    'Última verificação: ' + new Date().toLocaleTimeString('pt-BR');
+  // Fica consultando o resultado a cada 2 segundos
+  pollInterval = setInterval(async () => {
+    try {
+      const res = await fetch('/api/check/result');
+      const data = await res.json();
+
+      if (!data.checking && data.results.length > 0) {
+        clearInterval(pollInterval);
+        renderCards(data.results);
+        btn.innerHTML = 'Verificar agora';
+        btn.disabled = false;
+        document.getElementById('last-check').textContent =
+          'Última verificação: ' + data.last_check;
+        startTimer();
+      }
+    } catch (e) { console.error(e); }
+  }, 2000);
 }
 
 async function showLoadingCards() {
