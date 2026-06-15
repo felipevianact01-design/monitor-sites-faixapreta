@@ -86,6 +86,9 @@ class UrlEntry(BaseModel):
     url: str
 
 
+_limits = httpx.Limits(max_connections=10, max_keepalive_connections=5)
+
+
 async def check_url(entry: dict) -> dict:
     url = entry["url"]
     if not url.startswith(("http://", "https://")):
@@ -96,7 +99,7 @@ async def check_url(entry: dict) -> dict:
     error = None
 
     try:
-        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True, limits=_limits) as client:
             response = await client.get(url)
         elapsed = round((time.time() - start) * 1000)
         code = response.status_code
