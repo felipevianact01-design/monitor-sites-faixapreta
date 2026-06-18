@@ -160,8 +160,7 @@ async def check_url(entry: dict, client: httpx.AsyncClient) -> dict:
         elapsed = round((time.time() - start) * 1000)
         code = response.status_code
 
-        # Qualquer resposta HTTP = site no ar (verde)
-        status, color = ("Lento", "yellow") if elapsed > 5000 else ("Online", "green")
+        status, color = "Online", "green"
 
     except httpx.ConnectTimeout:
         elapsed = round((time.time() - start) * 1000)
@@ -171,7 +170,7 @@ async def check_url(entry: dict, client: httpx.AsyncClient) -> dict:
         status, color, error = "Fora do ar", "red", "Conexão recusada"
     except httpx.SSLError:
         elapsed = round((time.time() - start) * 1000)
-        status, color, error = "Erro SSL", "yellow", "Certificado SSL inválido"
+        status, color, error = "Erro SSL", "red", "Certificado SSL inválido"
     except Exception as e:
         elapsed = round((time.time() - start) * 1000)
         status, color, error = "Erro", "red", str(e)[:120]
