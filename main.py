@@ -82,9 +82,15 @@ async def run_all_checks():
             async with semaphore:
                 return await check_url(u, client)
 
+        browser_headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
+        }
         async with httpx.AsyncClient(
             timeout=8, follow_redirects=True,
-            limits=httpx.Limits(max_connections=10, max_keepalive_connections=5)
+            limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
+            headers=browser_headers,
         ) as client:
             raw = await asyncio.gather(*[guarded(u) for u in urls], return_exceptions=True)
 
