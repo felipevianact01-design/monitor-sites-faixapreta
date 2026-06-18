@@ -160,12 +160,8 @@ async def check_url(entry: dict, client: httpx.AsyncClient) -> dict:
         elapsed = round((time.time() - start) * 1000)
         code = response.status_code
 
-        if 200 <= code < 300:
-            status, color = ("Lento", "yellow") if elapsed > 5000 else ("Online", "green")
-        elif 300 <= code < 400:
-            status, color = "Redirecionando", "yellow"
-        else:
-            status, color = f"Erro {code}", "red"
+        # Qualquer resposta HTTP = site no ar (verde)
+        status, color = ("Lento", "yellow") if elapsed > 5000 else ("Online", "green")
 
     except httpx.ConnectTimeout:
         elapsed = round((time.time() - start) * 1000)
