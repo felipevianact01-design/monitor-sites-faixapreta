@@ -160,7 +160,21 @@ async def check_url(entry: dict, client: httpx.AsyncClient) -> dict:
         elapsed = round((time.time() - start) * 1000)
         code = response.status_code
 
-        status, color = "Online", "green"
+        # Detecta páginas de suspensão de hospedagem (retornam 200 mas site está fora)
+        SUSPENSION_KEYWORDS = [
+            "verify your email to get your website back",
+            "account suspended",
+            "domain suspended",
+            "this account has been suspended",
+            "site suspended",
+            "hosting suspended",
+            "suspended domain",
+        ]
+        body = response.text[:3000].lower()
+        if any(kw in body for kw in SUSPENSION_KEYWORDS):
+            status, color, error = "Suspenso", "red", "Site suspenso pela hospedagem"
+        else:
+            status, color = "Online", "green"
 
     except httpx.ConnectTimeout:
         elapsed = round((time.time() - start) * 1000)
