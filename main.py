@@ -165,6 +165,8 @@ async def check_url(entry: dict, client: httpx.AsyncClient) -> dict:
             "verify your email to get your website back",
             "account suspended",
             "domain suspended",
+            "domain is suspended",
+            "your domain is suspended",
             "this account has been suspended",
             "site suspended",
             "hosting suspended",
