@@ -171,6 +171,8 @@ async def check_url(entry: dict, client: httpx.AsyncClient) -> dict:
             "site suspended",
             "hosting suspended",
             "suspended domain",
+            "bandwidth limit exceeded",
+            "resource limit is reached",
         ]
         body = response.text[:3000].lower()
         if any(kw in body for kw in SUSPENSION_KEYWORDS):
